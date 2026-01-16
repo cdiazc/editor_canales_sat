@@ -15,3 +15,7 @@ Necesitas python3 instalado y tk
 
 En tu terminal:
 $python editor_canales.py
+
+# Notas
+
+El Viark Combo probablemente ignora los nombres de las listas de favoritos al importar y solo los lee cuando se renombran manualmente desde el menú del deco. Es una limitación del firmware.
