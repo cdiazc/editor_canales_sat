@@ -199,17 +199,8 @@ class SDXEditorApp:
                     f"Primeros caracteres:\n{html_content[:500]}")
                 return
             
-            # Hacer matching con canales locales
-            matched, not_matched = self._match_channels(kos_channels)
-            
-            if not matched:
-                messagebox.showwarning("Aviso", 
-                    f"No se encontró ninguna coincidencia entre los {len(kos_channels)} canales de KingOfSat "
-                    f"y tu archivo SDX.\n\n{len(not_matched)} canales no encontrados.")
-                return
-            
-            # Preguntar en qué lista añadir
-            self._show_import_dialog(matched, not_matched, url)
+            # Mostrar diálogo de importación con los canales de KingOfSat
+            self._show_import_dialog(kos_channels, url)
             
         except URLError as e:
             messagebox.showerror("Error de conexión", f"No se pudo conectar a KingOfSat:\n{e}")
@@ -224,97 +215,54 @@ class SDXEditorApp:
         channels = []
         current_freq = 0
         
-        # El HTML real tiene tags <table>, <tr>, <td>
-        # Buscar frecuencias en filas de transponder
-        # Patrón: frecuencia tipo 10758.50 dentro de una celda
-        freq_pattern = re.compile(r'>(\d{4,5})[.,]\d{2}<')
+        # Buscar frecuencias: class="bld">10758.50</td>
+        # Formato: 5 dígitos punto 2 decimales
+        freq_pattern = re.compile(r'class="bld">(\d{5})\.\d{2}</td>')
         
-        # Buscar todas las filas de la tabla
-        # Patrón para filas de canal: tienen un SID de 5 dígitos
-        row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL | re.IGNORECASE)
-        cell_pattern = re.compile(r'<td[^>]*>(.*?)</td>', re.DOTALL | re.IGNORECASE)
+        # Buscar bloques de canal: desde <tr data-channel-id hasta </tr>
+        channel_pattern = re.compile(
+            r'<tr\s+data-channel-id="(\d+)">(.*?)</tr>',
+            re.DOTALL | re.IGNORECASE
+        )
         
-        for row_match in row_pattern.finditer(html_content):
-            row_content = row_match.group(1)
+        # Primero, extraer todas las frecuencias con sus posiciones
+        freq_positions = []
+        for match in freq_pattern.finditer(html_content):
+            freq_positions.append((match.start(), int(match.group(1))))
+        
+        # Para cada canal, encontrar la frecuencia más reciente (anterior en el HTML)
+        for match in channel_pattern.finditer(html_content):
+            channel_pos = match.start()
+            channel_html = match.group(2)
             
-            # Extraer todas las celdas de la fila
-            cells = cell_pattern.findall(row_content)
-            
-            if not cells:
-                continue
-            
-            # Buscar si es una fila de transponder (contiene frecuencia)
-            row_text = ' '.join(cells)
-            freq_match = freq_pattern.search(row_text)
-            if freq_match and ('DVB-S' in row_text or 'QPSK' in row_text or '8PSK' in row_text):
-                current_freq = int(freq_match.group(1))
-                continue
-            
-            # Buscar SID de 5 dígitos en las celdas
-            sid = None
-            sid_index = -1
-            for i, cell in enumerate(cells):
-                cell_clean = re.sub(r'<[^>]+>', '', cell).strip()
-                if re.match(r'^\d{5}$', cell_clean):
-                    sid = int(cell_clean)
-                    sid_index = i
+            # Encontrar la frecuencia más cercana anterior
+            freq = 0
+            for pos, f in freq_positions:
+                if pos < channel_pos:
+                    freq = f
+                else:
                     break
             
-            if not sid or sid_index < 3:
+            # Extraer nombre: class="A3">NombreCanal</a>
+            name_match = re.search(r'class="A3">([^<]+)</a>', channel_html)
+            if not name_match:
                 continue
+            name = name_match.group(1).strip()
             
-            # El nombre está en las primeras celdas (generalmente posición 2 o 3)
-            name = None
-            skip_words = [
-                'spain', 'france', 'germany', 'united kingdom', 'italy', 'portugal',
-                'sport', 'movies', 'news', 'general', 'various', 'music', 'children',
-                'entertainment', 'documentaries', 'series', 'regional', 'lifestyle',
-                'comedy', 'cooking', 'history', 'erotic', 'pay per view',
-                'nagravision', 'mediaguard', 'clear', 'conax', 'viaccess',
-                'movistar+', 'movistar', 'name', 'country', 'category', 'packages',
-                'encryption', 'sid', 'vpid', 'audio', 'pmt', 'pcr', 'txt', 'update',
-                'undefined', ''
-            ]
-            
-            for i in range(min(sid_index, 5)):
-                cell = cells[i]
-                # Limpiar HTML
-                cell_clean = re.sub(r'<[^>]+>', ' ', cell)
-                cell_clean = re.sub(r'\s+', ' ', cell_clean).strip()
-                
-                # Extraer texto del enlace si existe
-                link_match = re.search(r'>([^<]+)<', cell)
-                if link_match:
-                    cell_clean = link_match.group(1).strip()
-                
-                # Verificar si es un nombre válido
-                if not cell_clean:
-                    continue
-                    
-                cell_lower = cell_clean.lower()
-                if cell_lower in skip_words:
-                    continue
-                if cell_clean.isdigit():
-                    continue
-                if len(cell_clean) < 2:
-                    continue
-                
-                # Parece un nombre de canal
-                name = cell_clean
-                break
+            # Extraer SID: <td class="s">29850</td>
+            sid_match = re.search(r'<td class="s">(\d+)</td>', channel_html)
+            if not sid_match:
+                continue
+            sid = int(sid_match.group(1))
             
             if name and sid:
                 channels.append({
                     'name': name,
                     'sid': sid,
-                    'freq': current_freq
+                    'freq': freq
                 })
         
-        # Si no encontramos nada con el método HTML, intentar con el texto plano
-        if not channels:
-            channels = self._parse_kingofsat_text(html_content)
-        
-        # Eliminar duplicados
+        # Eliminar duplicados (mismo nombre y SID)
         seen = set()
         unique = []
         for ch in channels:
@@ -326,167 +274,18 @@ class SDXEditorApp:
         return unique
 
     def _parse_kingofsat_text(self, content):
-        """Parser alternativo que busca patrones en el texto."""
-        channels = []
-        current_freq = 0
-        
-        # Limpiar HTML tags para obtener texto
-        text = re.sub(r'<[^>]+>', '|', content)
-        text = re.sub(r'\|+', '|', text)
-        
-        lines = text.split('\n')
-        
-        for line in lines:
-            # Buscar frecuencia
-            freq_match = re.search(r'(\d{4,5})[.,]\d{2}\s*\|?\s*[VH]', line)
-            if freq_match:
-                current_freq = int(freq_match.group(1))
-                continue
-            
-            # Buscar SID
-            sid_match = re.search(r'\|\s*(\d{5})\s*\|', line)
-            if not sid_match:
-                continue
-            
-            sid = int(sid_match.group(1))
-            
-            # Buscar nombre (texto antes del SID que no sea categoría/país)
-            parts = line.split('|')
-            skip_words = ['spain', 'france', 'germany', 'sport', 'movies', 'news', 
-                         'general', 'various', 'music', 'nagravision', 'mediaguard',
-                         'clear', 'movistar', '']
-            
-            name = None
-            for part in parts:
-                part = part.strip()
-                if not part or part.lower() in skip_words:
-                    continue
-                if part.isdigit() or re.match(r'^\d{5}$', part):
-                    continue
-                if len(part) >= 2 and len(part) <= 60:
-                    name = part
-                    break
-            
-            if name and sid:
-                channels.append({
-                    'name': name,
-                    'sid': sid,
-                    'freq': current_freq
-                })
-        
-        return channels
+        """Parser alternativo - ya no se usa."""
+        return []
 
     def _parse_kingofsat_alternative(self, html_content):
         """Método alternativo - no usado."""
         return []
 
-    def _match_channels(self, kos_channels):
-        """Busca coincidencias entre canales de KingOfSat y el archivo SDX."""
-        matched = []
-        not_matched = []
-        
-        # Crear índice por SID para búsqueda rápida
-        sid_index = {}
-        for unique_key, name in self.program_list:
-            info = self.programs_dict[unique_key]
-            sid = info['sid']
-            if sid not in sid_index:
-                sid_index[sid] = []
-            sid_index[sid].append((unique_key, info))
-        
-        # Crear índice por nombre normalizado
-        name_index = {}
-        for unique_key, name in self.program_list:
-            info = self.programs_dict[unique_key]
-            norm_name = self._normalize_name(name)
-            if norm_name not in name_index:
-                name_index[norm_name] = []
-            name_index[norm_name].append((unique_key, info))
-        
-        for kos_ch in kos_channels:
-            found = False
-            
-            # Intento 1: Match por SID exacto
-            if kos_ch['sid'] in sid_index:
-                candidates = sid_index[kos_ch['sid']]
-                # Si hay múltiples, preferir el que coincida en frecuencia
-                if len(candidates) == 1:
-                    matched.append({
-                        'kos': kos_ch,
-                        'local': candidates[0][1],
-                        'unique_key': candidates[0][0],
-                        'match_type': 'SID'
-                    })
-                    found = True
-                else:
-                    # Buscar por frecuencia también
-                    for unique_key, info in candidates:
-                        if kos_ch['freq'] and abs(info['freq'] - kos_ch['freq']) < 5:
-                            matched.append({
-                                'kos': kos_ch,
-                                'local': info,
-                                'unique_key': unique_key,
-                                'match_type': 'SID+Freq'
-                            })
-                            found = True
-                            break
-                    if not found and candidates:
-                        # Usar el primero si no hay match por frecuencia
-                        matched.append({
-                            'kos': kos_ch,
-                            'local': candidates[0][1],
-                            'unique_key': candidates[0][0],
-                            'match_type': 'SID'
-                        })
-                        found = True
-            
-            # Intento 2: Match por nombre normalizado
-            if not found:
-                norm_name = self._normalize_name(kos_ch['name'])
-                if norm_name in name_index:
-                    candidates = name_index[norm_name]
-                    matched.append({
-                        'kos': kos_ch,
-                        'local': candidates[0][1],
-                        'unique_key': candidates[0][0],
-                        'match_type': 'Nombre'
-                    })
-                    found = True
-            
-            # Intento 3: Match parcial por nombre
-            if not found:
-                for norm_name, candidates in name_index.items():
-                    kos_norm = self._normalize_name(kos_ch['name'])
-                    if kos_norm in norm_name or norm_name in kos_norm:
-                        matched.append({
-                            'kos': kos_ch,
-                            'local': candidates[0][1],
-                            'unique_key': candidates[0][0],
-                            'match_type': 'Parcial'
-                        })
-                        found = True
-                        break
-            
-            if not found:
-                not_matched.append(kos_ch)
-        
-        return matched, not_matched
-
-    def _normalize_name(self, name):
-        """Normaliza un nombre de canal para comparación."""
-        # Convertir a minúsculas
-        name = name.lower()
-        # Eliminar caracteres especiales
-        name = re.sub(r'[^a-z0-9]', '', name)
-        # Eliminar sufijos comunes
-        name = re.sub(r'(hd|sd|fhd|uhd|4k|spain|españa|esp)$', '', name)
-        return name
-
-    def _show_import_dialog(self, matched, not_matched, url):
+    def _show_import_dialog(self, kos_channels, url):
         """Muestra diálogo con resultados y opciones de importación."""
         dialog = tk.Toplevel(self.root)
-        dialog.title("Resultados de importación")
-        dialog.geometry("700x500")
+        dialog.title("Importar desde KingOfSat")
+        dialog.geometry("700x550")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -495,70 +294,41 @@ class SDXEditorApp:
         info_frame.pack(fill=tk.X, padx=10)
         
         tk.Label(info_frame, text=f"URL: {url}", anchor="w", fg="blue").pack(fill=tk.X)
-        tk.Label(info_frame, text=f"✅ Canales encontrados: {len(matched)}", anchor="w", fg="green").pack(fill=tk.X)
-        tk.Label(info_frame, text=f"❌ No encontrados: {len(not_matched)}", anchor="w", fg="red").pack(fill=tk.X)
+        tk.Label(info_frame, text=f"📡 Canales encontrados: {len(kos_channels)}", 
+                anchor="w", fg="green", font=('TkDefaultFont', 10, 'bold')).pack(fill=tk.X)
         
-        # Notebook con pestañas
-        notebook = ttk.Notebook(dialog)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Lista de canales
+        list_frame = tk.LabelFrame(dialog, text="Canales a importar")
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Pestaña de canales encontrados
-        found_frame = tk.Frame(notebook)
-        notebook.add(found_frame, text=f"Encontrados ({len(matched)})")
+        columns = ("name", "sid", "freq")
+        tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
+        tree.heading("name", text="Nombre")
+        tree.heading("sid", text="SID")
+        tree.heading("freq", text="Freq (MHz)")
         
-        columns = ("kos_name", "local_name", "sid", "freq", "match")
-        tree_found = ttk.Treeview(found_frame, columns=columns, show="headings", height=15)
-        tree_found.heading("kos_name", text="Nombre KingOfSat")
-        tree_found.heading("local_name", text="Nombre Local")
-        tree_found.heading("sid", text="SID")
-        tree_found.heading("freq", text="Freq")
-        tree_found.heading("match", text="Tipo Match")
+        tree.column("name", width=350)
+        tree.column("sid", width=100)
+        tree.column("freq", width=100)
         
-        tree_found.column("kos_name", width=180)
-        tree_found.column("local_name", width=180)
-        tree_found.column("sid", width=60)
-        tree_found.column("freq", width=60)
-        tree_found.column("match", width=80)
+        for ch in kos_channels:
+            tree.insert("", "end", values=(ch['name'], ch['sid'], ch['freq']))
         
-        for m in matched:
-            tree_found.insert("", "end", values=(
-                m['kos']['name'],
-                m['local']['name'],
-                m['kos']['sid'],
-                m['local']['freq'],
-                m['match_type']
-            ))
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(list_frame, command=tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.config(yscrollcommand=sb.set)
         
-        tree_found.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb_found = ttk.Scrollbar(found_frame, command=tree_found.yview)
-        sb_found.pack(side=tk.RIGHT, fill=tk.Y)
-        tree_found.config(yscrollcommand=sb_found.set)
+        # Frame de opciones
+        options_frame = tk.LabelFrame(dialog, text="Opciones")
+        options_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Pestaña de no encontrados
-        notfound_frame = tk.Frame(notebook)
-        notebook.add(notfound_frame, text=f"No encontrados ({len(not_matched)})")
+        # Selector de lista
+        fav_select_frame = tk.Frame(options_frame)
+        fav_select_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        columns_nf = ("name", "sid", "freq")
-        tree_notfound = ttk.Treeview(notfound_frame, columns=columns_nf, show="headings", height=15)
-        tree_notfound.heading("name", text="Nombre")
-        tree_notfound.heading("sid", text="SID")
-        tree_notfound.heading("freq", text="Freq")
+        tk.Label(fav_select_frame, text="Importar a lista:").pack(side=tk.LEFT)
         
-        for ch in not_matched:
-            tree_notfound.insert("", "end", values=(ch['name'], ch['sid'], ch['freq']))
-        
-        tree_notfound.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb_nf = ttk.Scrollbar(notfound_frame, command=tree_notfound.yview)
-        sb_nf.pack(side=tk.RIGHT, fill=tk.Y)
-        tree_notfound.config(yscrollcommand=sb_nf.set)
-        
-        # Frame de acciones
-        action_frame = tk.Frame(dialog, pady=10)
-        action_frame.pack(fill=tk.X, padx=10)
-        
-        tk.Label(action_frame, text="Añadir a lista de favoritos:").pack(side=tk.LEFT)
-        
-        # Combo con listas de favoritos
         fav_names = []
         if self.fav_names_obj_index != -1:
             fav_names = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"].get("aucFavReName", [])
@@ -569,62 +339,88 @@ class SDXEditorApp:
             fav_options.append((f_idx, name))
         
         combo_var = tk.StringVar()
-        combo = ttk.Combobox(action_frame, textvariable=combo_var, state="readonly", width=20)
+        combo = ttk.Combobox(fav_select_frame, textvariable=combo_var, state="readonly", width=25)
         combo['values'] = [f"{idx}: {name}" for idx, name in fav_options]
         if combo['values']:
             combo.current(0)
         combo.pack(side=tk.LEFT, padx=10)
         
+        # Checkbox sobreescribir
+        overwrite_var = tk.BooleanVar(value=False)
+        overwrite_check = tk.Checkbutton(options_frame, text="Sobreescribir lista (eliminar canales existentes)", 
+                                          variable=overwrite_var, fg="red")
+        overwrite_check.pack(anchor=tk.W, padx=5, pady=5)
+        
+        # Botones
+        action_frame = tk.Frame(dialog, pady=10)
+        action_frame.pack(fill=tk.X, padx=10)
+        
         def do_import():
             if not combo_var.get():
                 return
             tab_id = int(combo_var.get().split(":")[0])
-            self._add_matched_to_favorites(matched, tab_id)
+            overwrite = overwrite_var.get()
+            self._import_kos_channels(kos_channels, tab_id, overwrite)
             dialog.destroy()
-            messagebox.showinfo("Importación completada", 
-                               f"Se añadieron {len(matched)} canales a la lista de favoritos.")
+            action = "reemplazaron" if overwrite else "añadieron"
+            messagebox.showinfo("Importación completada", f"Se {action} {len(kos_channels)} canales.")
         
-        tk.Button(action_frame, text="Importar canales encontrados", command=do_import, 
-                  bg="#90EE90", fg="black", activebackground="#32CD32").pack(side=tk.LEFT, padx=10)
+        tk.Button(action_frame, text="Importar canales", command=do_import, 
+                  bg="#90EE90", fg="black", activebackground="#32CD32", 
+                  font=('TkDefaultFont', 10, 'bold'), padx=20).pack(side=tk.LEFT, padx=10)
         tk.Button(action_frame, text="Cancelar", command=dialog.destroy).pack(side=tk.RIGHT)
 
-    def _add_matched_to_favorites(self, matched, tab_id):
-        """Añade los canales coincidentes a una lista de favoritos."""
+    def _import_kos_channels(self, channels, tab_id, overwrite=False):
+        """Importa canales de KingOfSat a una lista de favoritos."""
         tree = self.fav_trees[tab_id]
+        
+        # Si overwrite, eliminar todos los canales existentes
+        if overwrite:
+            for item in tree.get_children():
+                tree.delete(item)
+        
+        # Crear índice de frecuencia -> transponder del SDX
+        freq_to_tp = {}
+        for tp_idx, freq in self.transponders.items():
+            # Guardar frecuencia exacta y con tolerancia ±3 MHz
+            for delta in range(-3, 4):
+                f = freq + delta
+                if f not in freq_to_tp:
+                    freq_to_tp[f] = tp_idx
+        
         current_count = len(tree.get_children())
         
-        for m in matched:
-            unique_key = m['unique_key']
-            channel_info = self.programs_dict.get(unique_key)
+        for ch in channels:
+            current_count += 1
+            sid = ch['sid']
+            freq = ch['freq']
             
-            if channel_info:
-                current_count += 1
-                st_prog_no = channel_info['stProgNo']
-                un_short = st_prog_no.get("unShort", {})
-                s_lo16 = un_short.get("sLo16", 0)
-                s_hi16 = un_short.get("sHi16", 0)
-                
-                ui_word32 = (s_hi16 << 16) | s_lo16
-                
-                fav_entry = {
-                    "uiWord32": ui_word32,
-                    "unShort": {
-                        "sLo16": s_lo16,
-                        "sHi16": s_hi16
-                    }
+            # Buscar transponder por frecuencia
+            tp_idx = freq_to_tp.get(freq, 0)
+            
+            # Fabricar entrada (orden de claves importante para el receptor)
+            ui_word32 = (tp_idx << 16) | sid
+            
+            fav_entry = {
+                "uiWord32": ui_word32,
+                "unShort": {
+                    "sLo16": sid,
+                    "sHi16": tp_idx
                 }
-                
-                fav_json = json.dumps(fav_entry, sort_keys=True, separators=(',', ':'))
-                tree.insert("", "end", tags=(fav_json,), values=(
-                    current_count,
-                    channel_info['name'],
-                    channel_info['freq'],
-                    channel_info['sid'],
-                    channel_info['lcn'],
-                    channel_info['hd'],
-                    channel_info['ca'],
-                    channel_info['tipo']
-                ))
+            }
+            
+            fav_json = json.dumps(fav_entry, separators=(',', ':'))
+            
+            tree.insert("", "end", tags=(fav_json,), values=(
+                current_count,
+                ch['name'],
+                freq,
+                sid,
+                "",  # LCN
+                "",  # HD
+                "",  # CA
+                ""   # Tipo
+            ))
         
         self._sync(tab_id)
         self._mark_unsaved()
@@ -902,14 +698,14 @@ class SDXEditorApp:
                 channel_info = self.programs_dict.get(lookup_key)
                 
                 if channel_info:
-                    fav_json = json.dumps(fav_entry, sort_keys=True, separators=(',', ':'))
+                    fav_json = json.dumps(fav_entry, separators=(',', ':'))
                     tree.insert("", "end", tags=(fav_json,), values=(
                         fav_order, channel_info['name'], channel_info['freq'],
                         channel_info['sid'], channel_info['lcn'], channel_info['hd'],
                         channel_info['ca'], channel_info['tipo']
                     ))
                 else:
-                    fav_json = json.dumps(fav_entry, sort_keys=True, separators=(',', ':'))
+                    fav_json = json.dumps(fav_entry, separators=(',', ':'))
                     tree.insert("", "end", tags=(fav_json,), values=(
                         fav_order, f"Desconocido ({s_lo16}_{s_hi16})", "", s_lo16, "", "", "", ""
                     ))
@@ -939,7 +735,7 @@ class SDXEditorApp:
                 s_hi16 = un_short.get("sHi16", 0)
                 ui_word32 = (s_hi16 << 16) | s_lo16
                 fav_entry = {"uiWord32": ui_word32, "unShort": {"sLo16": s_lo16, "sHi16": s_hi16}}
-                fav_json = json.dumps(fav_entry, sort_keys=True, separators=(',', ':'))
+                fav_json = json.dumps(fav_entry, separators=(',', ':'))
                 tree.insert("", "end", tags=(fav_json,), values=(
                     current_count, channel_info['name'], channel_info['freq'],
                     channel_info['sid'], channel_info['lcn'], channel_info['hd'],
@@ -1023,14 +819,45 @@ class SDXEditorApp:
         
         new = simpledialog.askstring("Renombrar", "Nuevo nombre:", initialvalue=old_full)
         if new and self.fav_names_obj_index != -1:
-            # Guardar nombre completo en los datos
+            # Guardar nombre completo en fav_list_info_in_box_object
             self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"]["aucFavReName"][tab_id] = new
+            
+            # Actualizar ucFavNameChangeMask para indicar que esta lista tiene nombre personalizado
+            fav_info = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"]
+            current_mask = fav_info.get("ucFavNameChangeMask", 0)
+            new_mask = current_mask | (1 << tab_id)  # Setear el bit correspondiente
+            fav_info["ucFavNameChangeMask"] = new_mask
+            
+            # IMPORTANTE: También actualizar en box_object (donde el deco lee los nombres)
+            self._sync_fav_names_to_box_object()
+            
             # Mostrar nombre truncado en la pestaña (máximo 7 caracteres)
             tab_name = new[:7] if len(new) > 7 else new
             # Añadir espacios para forzar ancho mínimo
             tab_name = tab_name.center(7)
             self.fav_notebook.tab(cur_idx, text=tab_name)
             self._mark_unsaved()
+    
+    def _sync_fav_names_to_box_object(self):
+        """Sincroniza los nombres de favoritos de fav_list_info_in_box_object a box_object."""
+        if self.fav_names_obj_index == -1:
+            return
+        
+        # Obtener nombres y mask de fav_list_info_in_box_object
+        fav_info = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"]
+        names = fav_info.get("aucFavReName", [])
+        mask = fav_info.get("ucFavNameChangeMask", 0)
+        
+        # Buscar y actualizar box_object
+        for obj in self.all_data_objects:
+            if not isinstance(obj, dict):
+                continue
+            if "box_object" in obj:
+                box = obj["box_object"]
+                if "aucFavReName" in box:
+                    box["aucFavReName"] = names.copy()
+                    box["ucFavNameChangeMask"] = mask
+                break
 
     def _sync(self, tab_id):
         tree = self.fav_trees[tab_id]
@@ -1044,6 +871,43 @@ class SDXEditorApp:
         fav_key = f"fav_list_object_{tab_id}"
         self.all_data_objects[obj_idx][fav_key]["stProgNo"] = new_data
         self.all_data_objects[obj_idx][fav_key]["sNoOfTVFavor"] = len(new_data)
+        
+        # Actualizar FavBit de todos los programas
+        self._update_all_favbits()
+    
+    def _update_all_favbits(self):
+        """Recalcula el FavBit de cada programa basándose en las listas de favoritos."""
+        # Primero, limpiar todos los FavBit
+        for obj in self.all_data_objects:
+            if not isinstance(obj, dict):
+                continue
+            key = list(obj.keys())[0]
+            if "program_tv_object" in key:
+                obj[key]["FavBit"] = 0
+        
+        # Luego, recorrer todas las listas de favoritos y setear los bits correspondientes
+        for fav_idx, obj_idx in self.fav_lists_indices.items():
+            fav_key = f"fav_list_object_{fav_idx}"
+            fav_obj = self.all_data_objects[obj_idx].get(fav_key, {})
+            fav_channels = fav_obj.get("stProgNo", [])
+            
+            bit_mask = 1 << fav_idx  # bit 0 para lista 0, bit 1 para lista 1, etc.
+            
+            for fav_entry in fav_channels:
+                un_short = fav_entry.get("unShort", {})
+                s_lo16 = un_short.get("sLo16", 0)
+                s_hi16 = un_short.get("sHi16", 0)
+                lookup_key = f"{s_lo16}_{s_hi16}"
+                
+                # Buscar el programa en programs_dict para obtener su obj_index
+                if lookup_key in self.programs_dict:
+                    prog_obj_idx = self.programs_dict[lookup_key].get('obj_index')
+                    if prog_obj_idx is not None:
+                        prog_obj = self.all_data_objects[prog_obj_idx]
+                        prog_key = list(prog_obj.keys())[0]
+                        if "program_tv_object" in prog_key:
+                            current_favbit = prog_obj[prog_key].get("FavBit", 0)
+                            prog_obj[prog_key]["FavBit"] = current_favbit | bit_mask
 
     def _get_current_fav_id(self):
         try:
