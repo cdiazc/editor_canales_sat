@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import sys
 import traceback
@@ -14,6 +15,17 @@ class SDXEditorApp:
         self.root = root
         self.root.title("Editor de canales SAT - v3.0")
         self.root.geometry("1500x800")
+
+        # Configurar icono de la aplicación
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(script_dir, "icon.png")
+            if os.path.exists(icon_path):
+                icon = tk.PhotoImage(file=icon_path)
+                self.root.iconphoto(True, icon)
+                self._icon = icon  # Mantener referencia para evitar garbage collection
+        except Exception:
+            pass  # Si falla, usar icono por defecto
 
         # Cursor de espera compatible con Linux, macOS y Windows
         self.cursor_wait = "watch" if sys.platform == "linux" else "wait"
