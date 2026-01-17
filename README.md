@@ -1,10 +1,12 @@
-# Editor de Canales SDX
+# Editor de canales SAT
 
-Editor gráfico para gestionar canales y listas de favoritos en receptores de satélite que utilizan archivos SDX. Esta herramienta te permite editar, reorganizar y gestionar tus canales de manera sencilla e intuitiva a través de una interfaz gráfica moderna.
+> ⚠️ **Aviso**: Este proyecto es 100% vibe coding - desarrollado mediante programación asistida por IA con [Claude Code](https://claude.ai/code).
+
+Editor gráfico para gestionar canales y listas de favoritos en receptores de satélite que utilizan archivos SDX y CHL. Esta herramienta te permite editar, reorganizar y gestionar tus canales de manera sencilla e intuitiva a través de una interfaz gráfica moderna.
 
 ## Descripción
 
-Este editor ha sido desarrollado específicamente para trabajar con archivos de configuración SDX de receptores satelitales. Ofrece una interfaz visual que facilita la gestión de grandes listas de canales, permitiéndote organizar tus favoritos de forma eficiente sin necesidad de editar archivos manualmente.
+Este editor ha sido desarrollado específicamente para trabajar con archivos de configuración SDX y CHL de receptores satelitales. Ofrece una interfaz visual que facilita la gestión de grandes listas de canales, permitiéndote organizar tus favoritos de forma eficiente sin necesidad de editar archivos manualmente.
 
 ## Capturas de Pantalla
 
@@ -16,11 +18,14 @@ Este editor ha sido desarrollado específicamente para trabajar con archivos de 
 
 ## Funcionalidades
 
-- ✨ **Editor de favoritos**: Crea y edita múltiples listas de canales favoritos
+- 📂 **Soporte SDX y CHL**: Carga y guarda archivos en ambos formatos
+- ✨ **Editor de favoritos**: Crea, edita y elimina listas de canales favoritos
 - 🔄 **Reordenación intuitiva**: Arrastra y suelta canales para reorganizarlos fácilmente
 - 📥 **Importación desde KingOfSat**: Importa paquetes de canales directamente desde KingOfSat
-- 💾 **Gestión de archivos SDX**: Abre, edita y guarda archivos de configuración SDX
+- ➕ **Gestión de listas**: Crea nuevas listas de favoritos o elimina las existentes
+- 💾 **Conversión de formatos**: Convierte entre SDX y CHL fácilmente
 - 🎯 **Interfaz gráfica moderna**: Trabaja con tus canales de forma visual y sencilla
+- 🖥️ **Multiplataforma**: Compatible con Linux, macOS y Windows
 
 ## Instalación
 
@@ -164,11 +169,12 @@ python3 editor_canales.py
 
 ## Uso
 
-1. **Abrir un archivo SDX**: Haz clic en "Archivo" → "Abrir" y selecciona tu archivo SDX
+1. **Cargar un archivo**: Usa "📂 Cargar SDX" o "📂 Cargar CHL" para abrir tu archivo de canales
 2. **Editar canales**: Navega por las pestañas de favoritos y edita los canales
 3. **Reorganizar**: Arrastra y suelta canales para cambiar su orden
-4. **Importar desde KingOfSat**: Usa la opción de importación para agregar paquetes de canales
-5. **Guardar cambios**: Haz clic en "Archivo" → "Guardar" para aplicar los cambios
+4. **Gestionar listas**: Usa "➕ Nueva Lista" para crear listas o "🗑️ Eliminar Lista" para borrarlas
+5. **Importar desde KingOfSat**: Usa el botón para agregar paquetes de canales desde la web
+6. **Guardar cambios**: Usa "💾 Guardar en SDX" o "💾 Guardar en CHL" según el formato deseado
 
 ## Notas Importantes
 
