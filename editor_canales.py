@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import sys
 import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -11,8 +12,11 @@ from urllib.error import URLError
 class SDXEditorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gestor de Canales SDX - v2.4")
+        self.root.title("Editor de canales SAT - v3.0")
         self.root.geometry("1500x800")
+
+        # Cursor de espera compatible con Linux, macOS y Windows
+        self.cursor_wait = "watch" if sys.platform == "linux" else "wait"
 
         self.all_data_objects = []
         self.programs_dict = {}
@@ -63,15 +67,20 @@ class SDXEditorApp:
         top_frame = tk.Frame(self.root, pady=10)
         top_frame.pack(fill=tk.X, padx=10)
 
-        tk.Button(top_frame, text="1. Cargar Archivo .sdx", command=self.load_file, bg="#e1e1e1").pack(side=tk.LEFT, padx=5)
-        tk.Button(top_frame, text="2. Guardar Cambios", command=self.save_file, bg="#8fbc8f", fg="black").pack(side=tk.LEFT, padx=5)
-        
+        # Grupo: Cargar archivos
+        tk.Button(top_frame, text="📂 Cargar SDX", command=self.load_file, bg="#e1e1e1").pack(side=tk.LEFT, padx=2)
+        tk.Button(top_frame, text="📂 Cargar CHL", command=self.import_chl_file, bg="#e1e1e1").pack(side=tk.LEFT, padx=2)
+
         # Separador
         ttk.Separator(top_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
-        
-        # Botón de importar desde KingOfSat
-        tk.Button(top_frame, text="📡 Importar desde KingOfSat", command=self.import_from_kingofsat, 
-                  bg="#fff3cd", fg="black").pack(side=tk.LEFT, padx=5)
+
+        # Grupo: Guardar archivos
+        tk.Button(top_frame, text="💾 Guardar en SDX", command=self.save_file, bg="#8fbc8f", fg="black").pack(side=tk.LEFT, padx=2)
+        tk.Button(top_frame, text="💾 Guardar en CHL", command=self.save_as_chl, bg="#87CEEB", fg="black").pack(side=tk.LEFT, padx=2)
+
+        # Botón de KingOfSat a la derecha
+        tk.Button(top_frame, text="📡 Importar desde KingOfSat", command=self.import_from_kingofsat,
+                  bg="#fff3cd", fg="black").pack(side=tk.RIGHT, padx=5)
 
         pw = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         pw.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -158,7 +167,7 @@ class SDXEditorApp:
         
         try:
             # Mostrar progreso
-            self.root.config(cursor="wait")
+            self.root.config(cursor=self.cursor_wait)
             self.root.update()
             
             # Descargar página
@@ -425,6 +434,358 @@ class SDXEditorApp:
         self._sync(tab_id)
         self._mark_unsaved()
 
+    def import_chl_file(self):
+        """Importa un archivo CHL convirtiéndolo a formato SDX."""
+        path = filedialog.askopenfilename(
+            title="Seleccionar archivo CHL",
+            filetypes=[("CHL Files", "*.chl"), ("All Files", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            self.root.config(cursor=self.cursor_wait)
+            self.root.update()
+
+            # Parse the CHL file
+            chl_data = self._parse_chl_file(path)
+
+            if not chl_data.get('channels'):
+                messagebox.showwarning("Aviso", "No se encontraron canales en el archivo CHL.")
+                return
+
+            # Convert to SDX format
+            sdx_objects = self._convert_chl_to_sdx(chl_data)
+
+            # Load the converted data
+            self.all_data_objects = sdx_objects
+            self._process_data()
+            self._refresh_all_channels_list()
+            self._build_fav_tabs()
+
+            # Reset unsaved changes flag
+            self.unsaved_changes = False
+            self.root.title("Editor de canales SAT - v3.0 (Importado desde CHL)")
+
+            messagebox.showinfo("Éxito",
+                f"Importación CHL completada:\n"
+                f"- {len(chl_data.get('satellites', []))} satélites\n"
+                f"- {len(chl_data.get('transponders', []))} transponders\n"
+                f"- {len(chl_data.get('channels', []))} canales\n"
+                f"- {len(chl_data.get('favorites', []))} listas de favoritos")
+
+        except Exception as e:
+            error_details = traceback.format_exc()
+            messagebox.showerror("Error", f"Error al importar CHL:\n{e}\n\nDetalles:\n{error_details[:500]}")
+        finally:
+            self.root.config(cursor="")
+
+    def _parse_chl_file(self, path):
+        """Parse a CHL file and extract all data."""
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+        data = {
+            'index': None,
+            'favorites': [],
+            'satellites': [],
+            'transponders': [],
+            'channels': []
+        }
+
+        decoder = json.JSONDecoder()
+        pos = 0
+        while pos < len(content):
+            chunk = content[pos:].lstrip()
+            if not chunk:
+                break
+            try:
+                obj, index = decoder.raw_decode(chunk)
+                obj_type = obj.get('Type', '')
+
+                if obj_type == 'index':
+                    data['index'] = obj
+                elif obj_type == 'fav':
+                    data['favorites'].append(obj)
+                elif obj_type == 'sat':
+                    data['satellites'].append(obj)
+                elif obj_type == 'tp':
+                    data['transponders'].append(obj)
+                elif obj_type == 'ch':
+                    data['channels'].append(obj)
+
+                pos += (len(content[pos:]) - len(chunk)) + index
+            except json.JSONDecodeError:
+                pos += 1
+
+        return data
+
+    def _convert_chl_to_sdx(self, chl_data):
+        """Convert CHL data to SDX format."""
+        sdx_objects = []
+
+        # Convert satellites
+        for sat in chl_data.get('satellites', []):
+            idx = sat.get('Index', 0)
+            angle = int(sat.get('Angle', '0'))
+            sdx_sat = {
+                f"satellite_object_{idx}": {
+                    "SatName": sat.get('Name', f'Sat {idx}'),
+                    "LowLnbFreq": 9750,
+                    "HighLnbFreq": 10600,
+                    "SatAngle": angle,
+                    "iSatMotoPosition": idx,
+                    "usUnicableIndex_old": 0,
+                    "TunerMask": 1,
+                    "UnicableFreq": 1210,
+                    "DLNBMask": 0,
+                    "DLNBUserBand": 0,
+                    "DLNBType": 0,
+                    "UnicableCH": 0,
+                    "uiSet": {
+                        "uiBit": {
+                            "22Hz": 2,
+                            "V12": 0,
+                            "DiSEqC": 0,
+                            "DiSEqC11": 0,
+                            "IsUnicable": 0,
+                            "UnicableType": 0,
+                            "FTAOnly": 0,
+                            "Motor": 0,
+                            "SatDir": 0,
+                            "LNBPower": 0,
+                            "SelectedTP": 0,
+                            "NetWorkSearch": 0,
+                            "Hide": 0
+                        },
+                        "uiStatus": 5
+                    },
+                    "tuner2_antena": {
+                        "LowLnbFreq": 9750,
+                        "HighLnbFreq": 10600,
+                        "iSatMotoPosition": idx,
+                        "UnicableCH": 0,
+                        "UnicableFreq": 1210,
+                        "uiSet": {
+                            "uiBit": {
+                                "22Hz": 2,
+                                "DiSEqC": 0,
+                                "DiSEqC11": 0,
+                                "UnicableType": 0,
+                                "Motor": 0,
+                                "LNBPower": 0,
+                                "SelectedTP": 0
+                            },
+                            "uiStatus": 5
+                        }
+                    }
+                }
+            }
+            sdx_objects.append(sdx_sat)
+
+        # Convert transponders
+        pol_map = {'H': 0, 'V': 1, 'L': 2, 'R': 3}
+        for tp in chl_data.get('transponders', []):
+            idx = tp.get('Index', 0)
+            freq = int(tp.get('Freq', '0'))
+            sr = int(tp.get('SR', '0'))
+            pol_str = tp.get('Pol', 'H')
+            pol = pol_map.get(pol_str.upper(), 0)
+            sat_idx = tp.get('SatIndex', 0)
+
+            sdx_tp = {
+                f"transponder_object_{idx}": {
+                    "usStartCode": 43690,
+                    "usNetworkLen": 0,
+                    "Freq": freq,
+                    "SR": sr,
+                    "t2_plp_index": 0,
+                    "t2_signal": 0,
+                    "uiFlag": 0,
+                    "ucMUX": 0,
+                    "ucQam": 0,
+                    "stFlag": {
+                        "POL": pol,
+                        "FEC": 4,
+                        "IQ": 0,
+                        "SatIndex": sat_idx,
+                        "NetNameNo": 0,
+                        "TPIndex": idx
+                    }
+                }
+            }
+            sdx_objects.append(sdx_tp)
+
+        # Convert channels
+        video_codec_map = {'MPEG2': 1, 'H264': 2, 'HEVC': 3, 'H265': 3}
+        for ch in chl_data.get('channels', []):
+            idx = ch.get('Index', 0)
+            tp_idx = ch.get('TPIndex', 0)
+            sid = int(ch.get('SID', '0'))
+            name = ch.get('Name', f'Canal {idx}')
+
+            # Video codec
+            video_type = ch.get('VideoType', 'MPEG2')
+            video_codec = video_codec_map.get(video_type, 1)
+
+            # HD detection
+            is_hd = 1 if ('HD' in name.upper() or video_type in ['H264', 'HEVC', 'H265']) else 0
+
+            # CA (encrypted)
+            ca_val = ch.get('CA', 0)
+            is_ca = 1 if ca_val > 0 else 0
+
+            # Service type
+            sdt_type = 25 if is_hd else 1  # 25=HD, 1=SD
+
+            # Audio array
+            audio_array = []
+            for aud in ch.get('Audio', []):
+                lang_str = aud.get('Lang', 'und')
+                # Map language string to numeric code (simplified)
+                lang_code = 0
+                if lang_str == 'spa':
+                    lang_code = 83
+                elif lang_str == 'eng':
+                    lang_code = 69
+                elif lang_str == 'por':
+                    lang_code = 80
+
+                audio_codec = 0  # MPEG
+                if aud.get('Type') == 'AAC':
+                    audio_codec = 1
+                elif aud.get('Type') == 'AC3' or aud.get('DolbyAC3', 0):
+                    audio_codec = 2
+
+                audio_array.append({
+                    "PID": aud.get('PID', 0),
+                    "Mode": 0,
+                    "Lang": lang_code,
+                    "Codec": audio_codec
+                })
+
+            # If no audio, add default
+            if not audio_array:
+                audio_array.append({"PID": 0, "Mode": 0, "Lang": 0, "Codec": 0})
+
+            sdx_ch = {
+                f"program_tv_object_{idx}": {
+                    "uiStartCode": 21845,
+                    "ucNameLen": len(name),
+                    "ucAudioPID": len(audio_array),
+                    "ucSubPID": 0,
+                    "VideoPID": ch.get('VideoPID', 0),
+                    "PCRPID": ch.get('PcrPID', ch.get('VideoPID', 0)),
+                    "PMTPID": ch.get('PmtPID', 0),
+                    "TTXPID": ch.get('TTXPID', 8191),
+                    "stProgNo": {
+                        "ServiceID": f"{tp_idx:08d}{sid:06d}",
+                        "unShort": {
+                            "sLo16": sid,
+                            "sHi16": tp_idx
+                        }
+                    },
+                    "uiSet": {
+                        "uiBit": {
+                            "Lock": ch.get('Lock', 0),
+                            "TV": 0,
+                            "Skip": ch.get('Skip', 0),
+                            "CA": is_ca,
+                            "VideoCodec": video_codec,
+                            "HD": is_hd,
+                            "Hide": ch.get('Hide', 0),
+                            "NetNameSelected": 0
+                        },
+                        "uiStatus": 0
+                    },
+                    "TSID": 0,
+                    "ONID": 0,
+                    "SDTServiceType": sdt_type,
+                    "t2mi_pg": ch.get('t2miPg', 0),
+                    "t2mi_plp_id": ch.get('t2miPlpId', 0),
+                    "t2mi_payload_pid": ch.get('t2miPayloadPid', 8191),
+                    "FavBit": 0,
+                    "iLCN": 0,
+                    "uiOriginalLCN": 0,
+                    "country_code": 0,
+                    "channel_list_id": 0,
+                    "visible": 0,
+                    "signal_quality": 75,
+                    "t2_signal": 0,
+                    "t2_plp_index": 0,
+                    "t2_plp_id": 0,
+                    "t2_lite_or_base": 0,
+                    "ServiceName": name,
+                    "AudioSelected": 0,
+                    "AudioArray": audio_array,
+                    "SubtSelected": 0,
+                    "SubtArray": []
+                }
+            }
+            sdx_objects.append(sdx_ch)
+
+        # Build channel index to (SID, TPIndex) mapping
+        ch_idx_to_sid_tp = {}
+        for ch in chl_data.get('channels', []):
+            ch_idx = ch.get('Index', 0)
+            sid = int(ch.get('SID', '0'))
+            tp_idx = ch.get('TPIndex', 0)
+            ch_idx_to_sid_tp[ch_idx] = (sid, tp_idx)
+
+        # Convert favorites
+        fav_names = []
+        for fav in chl_data.get('favorites', []):
+            idx = fav.get('Index', 0)
+            name = fav.get('Name', f'Lista {idx}')
+            fav_names.append(name)
+
+            # Convert TVChs to stProgNo
+            st_prog_no = []
+            for ch_idx in fav.get('TVChs', []):
+                if ch_idx in ch_idx_to_sid_tp:
+                    sid, tp_idx = ch_idx_to_sid_tp[ch_idx]
+                    ui_word32 = (tp_idx << 16) | sid
+                    st_prog_no.append({
+                        "uiWord32": ui_word32,
+                        "unShort": {
+                            "sLo16": sid,
+                            "sHi16": tp_idx
+                        }
+                    })
+
+            sdx_fav = {
+                f"fav_list_object_{idx}": {
+                    "sNoOfTVFavor": len(st_prog_no),
+                    "sNoOfRadioFavor": 0,
+                    "stProgNo": st_prog_no
+                }
+            }
+            sdx_objects.append(sdx_fav)
+
+        # Pad fav_names to 8 entries
+        while len(fav_names) < 8:
+            fav_names.append(f"Lista {len(fav_names)}")
+
+        # Create fav_list_info_in_box_object
+        sdx_fav_info = {
+            "fav_list_info_in_box_object": {
+                "aucFavReName": fav_names[:8],
+                "ucFavNameChangeMask": 255
+            }
+        }
+        sdx_objects.append(sdx_fav_info)
+
+        # Create box_object with basic settings
+        sdx_box = {
+            "box_object": {
+                "aucFavReName": fav_names[:8],
+                "ucFavNameChangeMask": 255
+            }
+        }
+        sdx_objects.append(sdx_box)
+
+        return sdx_objects
+
     def _setup_drag_and_drop(self, tree, tab_id):
         """Configura drag & drop, edición inline y tecla Delete para un Treeview de favoritos."""
         tree.bind("<ButtonPress-1>", lambda e: self._on_drag_start(e, tree, tab_id))
@@ -553,7 +914,7 @@ class SDXEditorApp:
             
             # Resetear flag de cambios
             self.unsaved_changes = False
-            self.root.title("Gestor de Canales SDX - v2.4")
+            self.root.title("Editor de canales SAT - v3.0")
             
             messagebox.showinfo("Éxito", f"Carga completada: {len(self.program_list)} canales encontrados.")
         except Exception as e:
@@ -565,6 +926,7 @@ class SDXEditorApp:
 
     def _process_data(self):
         self.programs_dict = {}
+        self.programs_by_sid_tp = {}  # Secondary lookup by SID_TP only
         self.program_list = []
         self.transponders = {}
         self.fav_lists_indices = {}
@@ -600,9 +962,11 @@ class SDXEditorApp:
                 sdt_type = data.get("SDTServiceType", 0)
                 signal_quality = data.get("signal_quality", 0)
                 freq = self.transponders.get(s_hi16, 0)
-                unique_key = f"{s_lo16}_{s_hi16}"
-                
-                self.programs_dict[unique_key] = {
+                # Use program index to ensure uniqueness for duplicate SID/TP combinations
+                prog_idx = key.split("_")[-1]
+                unique_key = f"{s_lo16}_{s_hi16}_{prog_idx}"
+
+                channel_data = {
                     'name': c_name,
                     'stProgNo': st_prog_no,
                     'obj_index': i,
@@ -615,6 +979,11 @@ class SDXEditorApp:
                     'tipo': self._get_service_type(sdt_type),
                     'calidad': f"{signal_quality}%"
                 }
+                self.programs_dict[unique_key] = channel_data
+                # Also store by SID_TP for favorites lookup (keeps first occurrence)
+                sid_tp_key = f"{s_lo16}_{s_hi16}"
+                if sid_tp_key not in self.programs_by_sid_tp:
+                    self.programs_by_sid_tp[sid_tp_key] = channel_data
                 self.program_list.append((unique_key, c_name))
             
             elif "fav_list_object_" in key:
@@ -695,7 +1064,7 @@ class SDXEditorApp:
                 s_lo16 = un_short.get("sLo16", 0)
                 s_hi16 = un_short.get("sHi16", 0)
                 lookup_key = f"{s_lo16}_{s_hi16}"
-                channel_info = self.programs_dict.get(lookup_key)
+                channel_info = self.programs_by_sid_tp.get(lookup_key)
                 
                 if channel_info:
                     fav_json = json.dumps(fav_entry, separators=(',', ':'))
@@ -931,6 +1300,229 @@ class SDXEditorApp:
             messagebox.showinfo("Guardado", "Cambios guardados con éxito.")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo guardar: {e}")
+
+    def save_as_chl(self):
+        """Guarda los datos en formato CHL."""
+        if not self.all_data_objects:
+            messagebox.showwarning("Aviso", "No hay datos para guardar.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".chl",
+            initialfile="LISTA_CANALES.chl",
+            filetypes=[("CHL Files", "*.chl"), ("All Files", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            self.root.config(cursor=self.cursor_wait)
+            self.root.update()
+
+            chl_objects = self._convert_sdx_to_chl()
+
+            with open(path, 'w', encoding='utf-8') as f:
+                for obj in chl_objects:
+                    f.write(json.dumps(obj, indent=2))
+                    f.write('\n')
+
+            self.unsaved_changes = False
+            title = self.root.title()
+            if title.endswith(" *"):
+                self.root.title(title[:-2])
+            messagebox.showinfo("Guardado", f"Archivo CHL guardado con éxito.\n{path}")
+
+        except Exception as e:
+            error_details = traceback.format_exc()
+            messagebox.showerror("Error", f"No se pudo guardar en CHL:\n{e}\n\nDetalles:\n{error_details[:500]}")
+        finally:
+            self.root.config(cursor="")
+
+    def _convert_sdx_to_chl(self):
+        """Convierte los datos SDX a formato CHL."""
+        chl_objects = []
+
+        # Contar elementos
+        satellites = []
+        transponders = []
+        channels = []
+        favorites = []
+
+        # Extraer datos de los objetos SDX
+        for obj in self.all_data_objects:
+            if not isinstance(obj, dict):
+                continue
+            key = list(obj.keys())[0]
+
+            if "satellite_object_" in key:
+                idx = int(key.split("_")[-1])
+                data = obj[key]
+                sat = {
+                    "Type": "sat",
+                    "Index": idx,
+                    "Name": data.get("SatName", f"Sat {idx}"),
+                    "Angle": str(data.get("SatAngle", 0)),
+                    "Band": "KU"
+                }
+                satellites.append((idx, sat))
+
+            elif "transponder_object_" in key:
+                idx = int(key.split("_")[-1])
+                data = obj[key]
+                st_flag = data.get("stFlag", {})
+                pol_map = {0: "H", 1: "V", 2: "L", 3: "R"}
+                tp = {
+                    "Type": "tp",
+                    "Index": idx,
+                    "SatIndex": st_flag.get("SatIndex", 0),
+                    "Freq": str(data.get("Freq", 0)),
+                    "SR": str(data.get("SR", 0)),
+                    "Pol": pol_map.get(st_flag.get("POL", 0), "H"),
+                    "FEC": "auto",
+                    "plsNumber": 0,
+                    "msTp": 0,
+                    "msIsid": 0,
+                    "tsnTp": 0,
+                    "tsnId": 0
+                }
+                transponders.append((idx, tp))
+
+            elif "program_tv_object" in key:
+                idx = int(key.split("_")[-1])
+                data = obj[key]
+                st_prog_no = data.get("stProgNo", {})
+                un_short = st_prog_no.get("unShort", {})
+                ui_set = data.get("uiSet", {}).get("uiBit", {})
+
+                # Video codec mapping
+                video_codec = ui_set.get("VideoCodec", 1)
+                video_type_map = {1: "MPEG2", 2: "H264", 3: "HEVC"}
+                video_type = video_type_map.get(video_codec, "MPEG2")
+
+                # Audio array
+                audio_array = []
+                for aud in data.get("AudioArray", []):
+                    lang_code = aud.get("Lang", 0)
+                    lang_map = {83: "spa", 69: "eng", 80: "por", 0: "und"}
+                    lang_str = lang_map.get(lang_code, "und")
+
+                    codec = aud.get("Codec", 0)
+                    audio_type_map = {0: "MPEG", 1: "AAC", 2: "AC3"}
+                    audio_type = audio_type_map.get(codec, "MPEG")
+
+                    audio_array.append({
+                        "PID": aud.get("PID", 0),
+                        "Type": audio_type,
+                        "Lang": lang_str,
+                        "DolbyAC3": 1 if codec == 2 else 0
+                    })
+
+                ch = {
+                    "dataPidSid": None,
+                    "Type": "ch",
+                    "TVType": "TV",
+                    "Index": idx,
+                    "TPIndex": un_short.get("sHi16", 0),
+                    "SID": str(un_short.get("sLo16", 0)),
+                    "Name": data.get("ServiceName", f"Canal {idx}"),
+                    "VideoPID": data.get("VideoPID", 0),
+                    "PcrPID": data.get("PCRPID", 0),
+                    "PmtPID": data.get("PMTPID", 0),
+                    "TTXPID": data.get("TTXPID", 8191),
+                    "Provider": "",
+                    "CA": 2 if ui_set.get("CA", 0) else 0,
+                    "Lock": ui_set.get("Lock", 0),
+                    "Skip": ui_set.get("Skip", 0),
+                    "Hide": ui_set.get("Hide", 0),
+                    "VideoType": video_type,
+                    "t2miPg": data.get("t2mi_pg", 0),
+                    "t2miPlpId": data.get("t2mi_plp_id", 0),
+                    "t2miPayloadPid": data.get("t2mi_payload_pid", 8191),
+                    "Audio": audio_array if audio_array else [{"PID": 0, "Type": "MPEG", "Lang": "und", "DolbyAC3": 0}],
+                    "Sub": [],
+                    "sattv": None,
+                    "data_pid": None,
+                    "PvtPID": None,
+                    "CaSystemIdList": None
+                }
+                channels.append((idx, ch))
+
+            elif "fav_list_object_" in key:
+                idx = int(key.split("_")[-1])
+                data = obj[key]
+                # Get fav name
+                fav_name = f"Lista {idx}"
+                if self.fav_names_obj_index != -1:
+                    names = self.all_data_objects[self.fav_names_obj_index].get("fav_list_info_in_box_object", {}).get("aucFavReName", [])
+                    if idx < len(names) and names[idx].strip():
+                        fav_name = names[idx]
+
+                # Store stProgNo for later processing
+                fav = {
+                    "Type": "fav",
+                    "Index": idx,
+                    "Name": fav_name,
+                    "TVChs": [],
+                    "RadioChs": [],
+                    "_stProgNo": data.get("stProgNo", [])  # Temporary, will be processed later
+                }
+                favorites.append((idx, fav))
+
+        # Ordenar por índice
+        satellites.sort(key=lambda x: x[0])
+        transponders.sort(key=lambda x: x[0])
+        channels.sort(key=lambda x: x[0])
+        favorites.sort(key=lambda x: x[0])
+
+        # Crear mapa de (SID, TPIndex) -> channel Index
+        sid_tp_to_channel_idx = {}
+        for ch_idx, ch in channels:
+            sid = int(ch["SID"])
+            tp_idx = ch["TPIndex"]
+            key = (sid, tp_idx)
+            if key not in sid_tp_to_channel_idx:
+                sid_tp_to_channel_idx[key] = ch_idx
+
+        # Procesar favoritos para añadir índices de canales
+        for _, fav in favorites:
+            st_prog_no = fav.pop("_stProgNo", [])
+            for prog in st_prog_no:
+                un_short = prog.get("unShort", {})
+                sid = un_short.get("sLo16", 0)
+                tp_idx = un_short.get("sHi16", 0)
+                ch_idx = sid_tp_to_channel_idx.get((sid, tp_idx))
+                if ch_idx is not None:
+                    fav["TVChs"].append(ch_idx)
+
+        # Crear objeto index
+        index_obj = {
+            "Type": "index",
+            "Ver": 1,
+            "Sat": len(satellites),
+            "TP": len(transponders),
+            "ChTV": len(channels),
+            "CHRadio": 0,
+            "FAV": len(favorites)
+        }
+        chl_objects.append(index_obj)
+
+        # Añadir favoritos
+        for _, fav in favorites:
+            chl_objects.append(fav)
+
+        # Añadir satélites
+        for _, sat in satellites:
+            chl_objects.append(sat)
+
+        # Añadir transponders
+        for _, tp in transponders:
+            chl_objects.append(tp)
+
+        # Añadir canales
+        for _, ch in channels:
+            chl_objects.append(ch)
+
+        return chl_objects
 
 if __name__ == "__main__":
     root = tk.Tk()
