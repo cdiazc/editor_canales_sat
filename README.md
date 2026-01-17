@@ -16,6 +16,9 @@ Este editor ha sido desarrollado específicamente para trabajar con archivos de 
 ![Gestión de Favoritos](2.png)
 *Gestión y organización de listas de favoritos*
 
+![Importación desde KingOfSat](3.png)
+*Importación de canales desde KingOfSat*
+
 ## Funcionalidades
 
 - 📂 **Soporte SDX y CHL**: Carga y guarda archivos en ambos formatos
