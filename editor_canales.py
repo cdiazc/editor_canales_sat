@@ -154,12 +154,19 @@ class SDXEditorApp:
         tk.Button(btn_f, text="<- Quitar", command=self.remove_from_fav, bg="#f8d7da").pack(side=tk.LEFT, padx=5)
         tk.Button(btn_f, text="↑ Subir", command=lambda: self.move_item(-1)).pack(side=tk.LEFT, padx=10)
         tk.Button(btn_f, text="↓ Bajar", command=lambda: self.move_item(1)).pack(side=tk.LEFT, padx=2)
+
+        # Separador visual
+        ttk.Separator(btn_f, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        # Gestión de listas
+        tk.Button(btn_f, text="➕ Nueva Lista", command=self.create_fav_list, bg="#e1e1e1").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_f, text="🗑️ Eliminar Lista", command=self.delete_fav_list, bg="#ffcccc").pack(side=tk.LEFT, padx=5)
         tk.Button(btn_f, text="Renombrar", command=self.rename_fav_group).pack(side=tk.RIGHT, padx=5)
 
     def import_from_kingofsat(self):
         """Importa canales desde una URL de KingOfSat."""
         if not self.program_list:
-            messagebox.showwarning("Aviso", "Primero debes cargar un archivo .sdx")
+            messagebox.showwarning("Aviso", "Primero debes cargar un archivo SDX o CHL")
             return
         
         # Pedir URL al usuario
@@ -774,15 +781,21 @@ class SDXEditorApp:
             }
             sdx_objects.append(sdx_fav)
 
-        # Pad fav_names to 8 entries
-        while len(fav_names) < 8:
-            fav_names.append(f"Lista {len(fav_names)}")
+        # Asegurar que fav_names tenga al menos 8 entradas y esté ordenado por índice
+        # Crear lista con todos los nombres en sus posiciones correctas
+        max_idx = max([fav.get('Index', 0) for fav in chl_data.get('favorites', [])] + [7])
+        all_fav_names = [f"Lista {i}" for i in range(max_idx + 1)]
+        for fav in chl_data.get('favorites', []):
+            idx = fav.get('Index', 0)
+            name = fav.get('Name', f'Lista {idx}')
+            if idx < len(all_fav_names):
+                all_fav_names[idx] = name
 
         # Create fav_list_info_in_box_object
         sdx_fav_info = {
             "fav_list_info_in_box_object": {
-                "aucFavReName": fav_names[:8],
-                "ucFavNameChangeMask": 255
+                "aucFavReName": all_fav_names,
+                "ucFavNameChangeMask": (1 << len(all_fav_names)) - 1  # Todos los bits activos
             }
         }
         sdx_objects.append(sdx_fav_info)
@@ -790,8 +803,8 @@ class SDXEditorApp:
         # Create box_object with basic settings
         sdx_box = {
             "box_object": {
-                "aucFavReName": fav_names[:8],
-                "ucFavNameChangeMask": 255
+                "aucFavReName": all_fav_names,
+                "ucFavNameChangeMask": (1 << len(all_fav_names)) - 1
             }
         }
         sdx_objects.append(sdx_box)
@@ -1218,7 +1231,133 @@ class SDXEditorApp:
             tab_name = tab_name.center(7)
             self.fav_notebook.tab(cur_idx, text=tab_name)
             self._mark_unsaved()
-    
+
+    def create_fav_list(self):
+        """Crea una nueva lista de favoritos."""
+        if not self.all_data_objects:
+            messagebox.showwarning("Aviso", "Primero debes cargar un archivo SDX o CHL")
+            return
+
+        # Pedir nombre para la nueva lista
+        name = simpledialog.askstring("Nueva Lista", "Nombre de la nueva lista:")
+        if not name:
+            return
+
+        # Encontrar el siguiente índice disponible
+        existing_indices = set(self.fav_lists_indices.keys())
+        new_idx = 0
+        while new_idx in existing_indices:
+            new_idx += 1
+
+        # Crear el objeto fav_list_object
+        new_fav_obj = {
+            f"fav_list_object_{new_idx}": {
+                "sNoOfTVFavor": 0,
+                "sNoOfRadioFavor": 0,
+                "stProgNo": []
+            }
+        }
+        self.all_data_objects.append(new_fav_obj)
+        self.fav_lists_indices[new_idx] = len(self.all_data_objects) - 1
+
+        # Actualizar nombres en fav_list_info_in_box_object
+        if self.fav_names_obj_index != -1:
+            fav_info = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"]
+            names = fav_info.get("aucFavReName", [])
+            # Extender la lista si es necesario
+            while len(names) <= new_idx:
+                names.append(f"Lista {len(names)}")
+            names[new_idx] = name
+            fav_info["aucFavReName"] = names
+            # Actualizar mask
+            current_mask = fav_info.get("ucFavNameChangeMask", 0)
+            fav_info["ucFavNameChangeMask"] = current_mask | (1 << new_idx)
+            self._sync_fav_names_to_box_object()
+
+        # Crear la pestaña en el notebook
+        frame = tk.Frame(self.fav_notebook)
+        tab_name = name[:7] if len(name) > 7 else name
+        tab_name = tab_name.center(7)
+        self.fav_notebook.add(frame, text=tab_name)
+
+        tree = self._create_fav_tree(frame, new_idx)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(frame, command=tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.config(yscrollcommand=sb.set)
+        self.fav_trees[new_idx] = tree
+
+        # Seleccionar la nueva pestaña
+        self.fav_notebook.select(frame)
+
+        self._mark_unsaved()
+        messagebox.showinfo("Lista creada", f"Lista '{name}' creada correctamente.")
+
+    def delete_fav_list(self):
+        """Elimina la lista de favoritos actualmente seleccionada."""
+        tab_id = self._get_current_fav_id()
+        if tab_id is None:
+            messagebox.showwarning("Aviso", "No hay ninguna lista seleccionada")
+            return
+
+        # Obtener nombre de la lista
+        fav_name = f"Lista {tab_id}"
+        if self.fav_names_obj_index != -1:
+            names = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"].get("aucFavReName", [])
+            if tab_id < len(names) and names[tab_id].strip():
+                fav_name = names[tab_id]
+
+        # Confirmar eliminación
+        if not messagebox.askyesno("Confirmar eliminación",
+                                    f"¿Estás seguro de que quieres eliminar la lista '{fav_name}'?\n\n"
+                                    "Se eliminarán todos los canales de esta lista."):
+            return
+
+        # Obtener índice de la pestaña actual
+        cur_tab_idx = self.fav_notebook.index(self.fav_notebook.select())
+
+        # Eliminar la pestaña del notebook
+        self.fav_notebook.forget(cur_tab_idx)
+
+        # Eliminar el tree de fav_trees
+        if tab_id in self.fav_trees:
+            del self.fav_trees[tab_id]
+
+        # Eliminar el objeto fav_list_object de all_data_objects
+        obj_idx = self.fav_lists_indices.get(tab_id)
+        if obj_idx is not None:
+            # Marcar para eliminar (ponemos None y luego limpiamos)
+            self.all_data_objects[obj_idx] = None
+
+        # Eliminar del índice
+        if tab_id in self.fav_lists_indices:
+            del self.fav_lists_indices[tab_id]
+
+        # Limpiar objetos None de all_data_objects y reindexar
+        self.all_data_objects = [obj for obj in self.all_data_objects if obj is not None]
+
+        # Reindexar fav_lists_indices
+        self.fav_lists_indices = {}
+        for i, obj in enumerate(self.all_data_objects):
+            if isinstance(obj, dict):
+                key = list(obj.keys())[0]
+                if "fav_list_object_" in key:
+                    idx = int(key.split("_")[-1])
+                    self.fav_lists_indices[idx] = i
+                elif "fav_list_info_in_box_object" in key:
+                    self.fav_names_obj_index = i
+
+        # Limpiar nombre de la lista eliminada
+        if self.fav_names_obj_index != -1:
+            fav_info = self.all_data_objects[self.fav_names_obj_index]["fav_list_info_in_box_object"]
+            names = fav_info.get("aucFavReName", [])
+            if tab_id < len(names):
+                names[tab_id] = ""
+            self._sync_fav_names_to_box_object()
+
+        self._mark_unsaved()
+        messagebox.showinfo("Lista eliminada", f"Lista '{fav_name}' eliminada correctamente.")
+
     def _sync_fav_names_to_box_object(self):
         """Sincroniza los nombres de favoritos de fav_list_info_in_box_object a box_object."""
         if self.fav_names_obj_index == -1:
