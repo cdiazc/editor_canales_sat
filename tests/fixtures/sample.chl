@@ -1,0 +1,5 @@
+{"Type": "sat", "Index": 0, "Name": "Astra 19.2E", "Angle": "192"}
+{"Type": "tp", "Index": 0, "Freq": "10758", "SR": "22000", "Pol": "H", "SatIndex": 0}
+{"Type": "ch", "Index": 0, "Name": "BBC World News", "SID": "28654", "TPIndex": 0, "VideoType": "MPEG2", "AudioLang": "eng", "CA": 0}
+{"Type": "ch", "Index": 1, "Name": "CNN International", "SID": "28655", "TPIndex": 0, "VideoType": "H264", "AudioLang": "eng", "CA": 0}
+{"Type": "fav", "Index": 0, "Name": "News Channels", "Channels": [0, 1]}
