@@ -185,6 +185,49 @@ python3 editor_canales.py
 - Se recomienda hacer una copia de seguridad de tus archivos SDX antes de editarlos.
 - El editor muestra una advertencia si intentas cerrar la aplicación con cambios sin guardar.
 
+## Testing
+
+El proyecto incluye un conjunto completo de pruebas unitarias para validar la funcionalidad principal.
+
+### Ejecutar las pruebas
+
+```bash
+# Instalar dependencias de desarrollo
+pip install -r requirements-dev.txt
+
+# Ejecutar todas las pruebas
+pytest
+
+# Ejecutar pruebas con más detalles
+pytest -v
+
+# Ejecutar pruebas con cobertura
+pytest --cov=channel_processor --cov-report=html
+```
+
+### Estructura de pruebas
+
+```
+tests/
+├── fixtures/           # Archivos de ejemplo para pruebas
+│   ├── sample.chl
+│   └── sample_kingofsat.html
+└── unit/              # Pruebas unitarias
+    ├── test_chl_parsing.py              # Parsing de archivos CHL
+    ├── test_chl_to_sdx_conversion.py    # Conversión CHL a SDX
+    ├── test_kingofsat_parsing.py        # Parsing de HTML de KingOfSat
+    ├── test_sdx_processing.py           # Procesamiento de datos SDX
+    └── test_utils.py                    # Funciones de utilidad
+```
+
+Las pruebas cubren:
+- ✅ Parsing de archivos CHL y extracción de datos
+- ✅ Conversión de formato CHL a SDX
+- ✅ Parsing de HTML de KingOfSat
+- ✅ Procesamiento de datos SDX
+- ✅ Mapeo de tipos de servicio, codecs de video, y códigos de idioma
+- ✅ Detección de canales HD, cifrados y UHD
+
 ## Licencia
 
 Este proyecto es de código abierto. Siéntete libre de usarlo, modificarlo y compartirlo.
